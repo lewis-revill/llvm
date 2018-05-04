@@ -79,7 +79,7 @@ public:
   }
 
   MCAssembler &getAssembler() { return *Assembler; }
-  MCAssembler *getAssemblerPtr() override { return nullptr; }
+  MCAssembler *getAssemblerPtr() override { return Assembler.get(); }
 
   inline void EmitEOL() {
     // Dump Explicit Comments here.

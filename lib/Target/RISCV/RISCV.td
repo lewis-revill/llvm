@@ -59,6 +59,10 @@ def FeatureRelax
     : SubtargetFeature<"relax", "EnableLinkerRelax", "true",
                        "Enable Linker relaxation.">;
 
+def FeatureReloc
+    : SubtargetFeature<"reloc", "ForceLinkerReloc", "false",
+                       "Force Linker relocation.">;
+
 //===----------------------------------------------------------------------===//
 // Registers, calling conventions, instruction descriptions.
 //===----------------------------------------------------------------------===//

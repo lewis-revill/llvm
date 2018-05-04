@@ -198,6 +198,8 @@ public:
   ///
   /// \returns true iff any relaxation occurred.
   bool relaxFragment(MCPaddingFragment *PF, MCAsmLayout &Layout);
+
+  virtual void setSTI(const MCSubtargetInfo &STI) {}
 };
 
 } // end namespace llvm

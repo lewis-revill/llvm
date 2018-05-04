@@ -27,25 +27,28 @@ using namespace llvm;
 
 namespace {
 class RISCVAsmBackend : public MCAsmBackend {
-  const MCSubtargetInfo &STI;
+  const MCSubtargetInfo *STI;
   uint8_t OSABI;
   bool Is64Bit;
 
 public:
   RISCVAsmBackend(const MCSubtargetInfo &STI, uint8_t OSABI, bool Is64Bit)
-      : MCAsmBackend(support::little), STI(STI), OSABI(OSABI),
+      : MCAsmBackend(support::little), STI(&STI), OSABI(OSABI),
         Is64Bit(Is64Bit) {}
   ~RISCVAsmBackend() override {}
 
   // Generate diff expression relocations if the relax feature is enabled,
   // otherwise it is safe for the assembler to calculate these internally.
   bool requiresDiffExpressionRelocations() const override {
-    return STI.getFeatureBits()[RISCV::FeatureRelax];
+    return STI->getFeatureBits()[RISCV::FeatureRelax] ||
+           STI->getFeatureBits()[RISCV::FeatureReloc];
   }
   void applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
                   const MCValue &Target, MutableArrayRef<char> Data,
                   uint64_t Value, bool IsResolved,
                   const MCSubtargetInfo *STI) const override;
+
+  void setSTI(const MCSubtargetInfo &_STI) override { STI = &_STI; }
 
   std::unique_ptr<MCObjectTargetWriter>
   createObjectTargetWriter() const override;
@@ -55,7 +58,8 @@ public:
   // during relaxation.
   bool shouldForceRelocation(const MCAssembler &Asm, const MCFixup &Fixup,
                              const MCValue &Target) override {
-    return STI.getFeatureBits()[RISCV::FeatureRelax];
+    return STI->getFeatureBits()[RISCV::FeatureRelax] ||
+           STI->getFeatureBits()[RISCV::FeatureReloc];
   }
 
   bool fixupNeedsRelaxation(const MCFixup &Fixup, uint64_t Value,
@@ -202,7 +206,7 @@ bool RISCVAsmBackend::mayNeedRelaxation(const MCInst &Inst,
 }
 
 bool RISCVAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count) const {
-  bool HasStdExtC = STI.getFeatureBits()[RISCV::FeatureStdExtC];
+  bool HasStdExtC = STI->getFeatureBits()[RISCV::FeatureStdExtC];
   unsigned MinNopLen = HasStdExtC ? 2 : 4;
 
   if ((Count % MinNopLen) != 0)

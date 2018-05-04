@@ -13,6 +13,8 @@
 #include "MCTargetDesc/RISCVTargetStreamer.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -1117,9 +1119,38 @@ bool RISCVAsmParser::parseDirectiveOption() {
     return false;
   }
 
+  if (Option == "relax") {
+    getTargetStreamer().emitDirectiveOptionRelax();
+
+    Parser.Lex();
+    if (Parser.getTok().isNot(AsmToken::EndOfStatement))
+      return Error(Parser.getTok().getLoc(),
+                   "unexpected token, expected end of statement");
+
+    setFeatureBits(RISCV::FeatureRelax, "relax");
+    setFeatureBits(RISCV::FeatureReloc, "reloc");
+    getTargetStreamer().getStreamer().getAssemblerPtr()->getBackend().setSTI(
+        getSTI());
+    return false;
+  }
+
+  if (Option == "norelax") {
+    getTargetStreamer().emitDirectiveOptionNoRelax();
+
+    Parser.Lex();
+    if (Parser.getTok().isNot(AsmToken::EndOfStatement))
+      return Error(Parser.getTok().getLoc(),
+                   "unexpected token, expected end of statement");
+
+    clearFeatureBits(RISCV::FeatureRelax, "relax");
+    getTargetStreamer().getStreamer().getAssemblerPtr()->getBackend().setSTI(
+        getSTI());
+    return false;
+  }
+
   // Unknown option.
   Warning(Parser.getTok().getLoc(),
-          "unknown option, expected 'rvc' or 'norvc'");
+          "unknown option, expected 'rvc', 'norvc', 'relax' or 'norelax'");
   Parser.eatToEndOfStatement();
   return false;
 }

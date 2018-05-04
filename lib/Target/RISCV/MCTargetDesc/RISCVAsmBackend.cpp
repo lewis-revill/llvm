@@ -37,10 +37,11 @@ public:
         Is64Bit(Is64Bit) {}
   ~RISCVAsmBackend() override {}
 
-  // Generate diff expression relocations if the relax feature is enabled,
-  // otherwise it is safe for the assembler to calculate these internally.
+  // Generate diff expression relocations. Note that if the relax feature is not
+  // enabled, it may be safe for the assembler to calculate these internally,
+  // but that requires more logic in RISCVAsmParser.
   bool requiresDiffExpressionRelocations() const override {
-    return STI.getFeatureBits()[RISCV::FeatureRelax];
+    return true;
   }
   void applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
                   const MCValue &Target, MutableArrayRef<char> Data,

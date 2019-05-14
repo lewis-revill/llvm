@@ -114,7 +114,7 @@ sb t1, %lo(bar)(a2)
 
 2:
 auipc t1, %pcrel_hi(bar)
-# NORELAX-RELOC-NOT: R_RISCV_PCREL_HI20
+# NORELAX-RELOC: R_RISCV_PCREL_HI20 bar 0x0
 # NORELAX-RELOC-NOT: R_RISCV_RELAX
 # RELAX-RELOC: R_RISCV_PCREL_HI20 bar 0x0
 # RELAX-RELOC: R_RISCV_RELAX - 0x0
@@ -122,7 +122,7 @@ auipc t1, %pcrel_hi(bar)
 # RELAX-FIXUP: fixup B - offset: 0, value: 0, kind: fixup_riscv_relax
 
 addi t1, t1, %pcrel_lo(2b)
-# NORELAX-RELOC-NOT: R_RISCV_PCREL_LO12_I
+# NORELAX-RELOC: R_RISCV_PCREL_LO12_I bar 0x4
 # NORELAX-RELOC-NOT: R_RISCV_RELAX
 # RELAX-RELOC: R_RISCV_PCREL_LO12_I .Ltmp1 0x0
 # RELAX-RELOC: R_RISCV_RELAX - 0x0
@@ -130,7 +130,7 @@ addi t1, t1, %pcrel_lo(2b)
 # RELAX-FIXUP: fixup B - offset: 0, value: 0, kind: fixup_riscv_relax
 
 sb t1, %pcrel_lo(2b)(a2)
-# NORELAX-RELOC-NOT: R_RISCV_PCREL_LO12_S
+# NORELAX-RELOC: R_RISCV_PCREL_LO12_S bar 0x8
 # NORELAX-RELOC-NOT: R_RISCV_RELAX
 # RELAX-RELOC: R_RISCV_PCREL_LO12_S .Ltmp1 0x0
 # RELAX-RELOC: R_RISCV_RELAX - 0x0

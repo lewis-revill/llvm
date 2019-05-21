@@ -92,8 +92,6 @@ static unsigned getSPReg(const RISCVSubtarget &STI) { return RISCV::X2; }
 
 void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
                                       MachineBasicBlock &MBB) const {
-  assert(&MF.front() == &MBB && "Shrink-wrapping not yet supported");
-
   MachineFrameInfo &MFI = MF.getFrameInfo();
   auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
   MachineBasicBlock::iterator MBBI = MBB.begin();
@@ -143,6 +141,9 @@ void RISCVFrameLowering::emitEpilogue(MachineFunction &MF,
   DebugLoc DL = MBBI->getDebugLoc();
   unsigned FPReg = getFPReg(STI);
   unsigned SPReg = getSPReg(STI);
+
+  if (!MBBI->isTerminator())
+    MBBI = std::next(MBBI);
 
   // Skip to before the restores of callee-saved registers
   // FIXME: assumes exactly one instruction is used to restore each

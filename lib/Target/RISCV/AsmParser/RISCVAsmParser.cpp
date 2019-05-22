@@ -1210,6 +1210,10 @@ OperandMatchResultTy RISCVAsmParser::parseCallSymbol(OperandVector &Operands) {
   if (getLexer().getKind() != AsmToken::Identifier)
     return MatchOperand_NoMatch;
 
+  // Avoid parsing the register in `call rd, foo` as a call symbol.
+  if (getLexer().peekTok().getKind() != AsmToken::EndOfStatement)
+    return MatchOperand_NoMatch;
+
   StringRef Identifier;
   if (getParser().parseIdentifier(Identifier))
     return MatchOperand_ParseFail;

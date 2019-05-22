@@ -30,6 +30,8 @@ private:
   /// FrameIndex used for transferring values between 64-bit FPRs and a pair
   /// of 32-bit GPRs via the stack.
   int MoveF64FrameIndex = -1;
+  /// Value of stack offset added by any call to an opaque __riscv_save routine.
+  unsigned LibCallStackOffset = 0;
 
 public:
   //  RISCVMachineFunctionInfo() = default;
@@ -47,6 +49,9 @@ public:
       MoveF64FrameIndex = MF.getFrameInfo().CreateStackObject(8, 8, false);
     return MoveF64FrameIndex;
   }
+
+  unsigned getLibCallStackOffset() const { return LibCallStackOffset; }
+  void setLibCallStackOffset(unsigned Offset) { LibCallStackOffset = Offset; }
 };
 
 } // end namespace llvm

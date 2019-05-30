@@ -30,6 +30,8 @@ private:
   /// FrameIndex used for transferring values between 64-bit FPRs and a pair
   /// of 32-bit GPRs via the stack.
   int MoveF64FrameIndex = -1;
+  /// Store whether libcalls are used to save/restore callee-saved registers.
+  Optional<bool> UseSaveRestoreLibCalls = None;
 
 public:
   //  RISCVMachineFunctionInfo() = default;
@@ -46,6 +48,14 @@ public:
     if (MoveF64FrameIndex == -1)
       MoveF64FrameIndex = MF.getFrameInfo().CreateStackObject(8, 8, false);
     return MoveF64FrameIndex;
+  }
+
+  bool useSaveRestoreLibCalls() const;
+
+  bool getUseSaveRestoreLibCalls() {
+    if (!UseSaveRestoreLibCalls)
+      UseSaveRestoreLibCalls = useSaveRestoreLibCalls();
+    return *UseSaveRestoreLibCalls;
   }
 };
 

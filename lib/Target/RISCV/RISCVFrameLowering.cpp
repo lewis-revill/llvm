@@ -33,6 +33,7 @@ bool RISCVFrameLowering::hasFP(const MachineFunction &MF) const {
 // Determines the size of the frame and maximum call frame size.
 void RISCVFrameLowering::determineFrameLayout(MachineFunction &MF) const {
   MachineFrameInfo &MFI = MF.getFrameInfo();
+  auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
   const RISCVRegisterInfo *RI = STI.getRegisterInfo();
 
   // Get the number of bytes to allocate from the FrameInfo.
@@ -90,6 +91,24 @@ static unsigned getFPReg(const RISCVSubtarget &STI) { return RISCV::X8; }
 // Returns the register used to hold the stack pointer.
 static unsigned getSPReg(const RISCVSubtarget &STI) { return RISCV::X2; }
 
+static bool EnableMSaveRestore = true;
+
+static bool useSaveRestoreLibCalls(const MachineFunction &MF) {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+
+  if (!EnableMSaveRestore)
+    return false;
+
+  // We cannot use fixed locations for the callee saved spill slots if there is
+  // any chance of other objects also requiring fixed locations in the stack
+  // frame. This is called before adding the fixed spill slots so there should
+  // be no fixed objects at all.
+  if (MFI.getNumFixedObjects())
+    return false;
+
+  return true;
+}
+
 void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
                                       MachineBasicBlock &MBB) const {
   assert(&MF.front() == &MBB && "Shrink-wrapping not yet supported");
@@ -101,6 +120,11 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   unsigned FPReg = getFPReg(STI);
   unsigned SPReg = getSPReg(STI);
 
+  // Since spillCalleeSavedRegisters may have inserted a libcall, skip past
+  // any instructions marked as FrameSetup
+  while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
+    ++MBBI;
+
   // Debug location must be unknown since the first debug location is used
   // to determine the end of the prologue.
   DebugLoc DL;
@@ -110,6 +134,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
 
   // FIXME (note copied from Lanai): This appears to be overallocating.  Needs
   // investigation. Get the number of bytes to allocate from the FrameInfo.
+  // FIXME: Adjust for callee saved registers that are saved via libcall.
   uint64_t StackSize = MFI.getStackSize();
 
   // Early exit if there is no need to allocate on the stack
@@ -125,8 +150,7 @@ void RISCVFrameLowering::emitPrologue(MachineFunction &MF,
   // to the stack, not before.
   // FIXME: assumes exactly one instruction is used to save each callee-saved
   // register.
-  const std::vector<CalleeSavedInfo> &CSI = MFI.getCalleeSavedInfo();
-  std::advance(MBBI, CSI.size());
+  std::advance(MBBI, RVFI->getNonFixedCSRs().size());
 
   // Generate new FP.
   if (hasFP(MF))
@@ -144,11 +168,18 @@ void RISCVFrameLowering::emitEpilogue(MachineFunction &MF,
   unsigned FPReg = getFPReg(STI);
   unsigned SPReg = getSPReg(STI);
 
+  // If callee-saved registers are saved via libcall, place stack adjustment
+  // before this call.
+  while (MBBI != MBB.begin() &&
+        std::prev(MBBI)->getFlag(MachineInstr::FrameDestroy))
+    --MBBI;
+
   // Skip to before the restores of callee-saved registers
   // FIXME: assumes exactly one instruction is used to restore each
   // callee-saved register.
-  auto LastFrameDestroy = std::prev(MBBI, MFI.getCalleeSavedInfo().size());
+  auto LastFrameDestroy = std::prev(MBBI, RVFI->getNonFixedCSRs().size());
 
+  // FIXME: Adjust for callee saved registers that are saved via libcall.
   uint64_t StackSize = MFI.getStackSize();
 
   // Restore the stack pointer using the value of the frame pointer. Only
@@ -294,4 +325,251 @@ MachineBasicBlock::iterator RISCVFrameLowering::eliminateCallFramePseudoInstr(
   }
 
   return MBB.erase(MI);
+}
+
+bool RISCVFrameLowering::assignCalleeSavedSpillSlots(
+    MachineFunction &MF, const TargetRegisterInfo *TRI,
+    std::vector<llvm::CalleeSavedInfo> &CSI) const {
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+
+  // This code is a workaround to be able to check whether save/restore libcalls
+  // with fixed spill slots will be used for this function. If so, the generic
+  // code can be used, which makes use of getCalleeSavedSpillSlots. The rest of
+  // this function is used when fixed spill slots cannot be used, and is mostly
+  // copied from the generic code.
+  if (useSaveRestoreLibCalls(MF))
+    return false;
+
+  if (CSI.empty())
+    return true; // Early exit if no callee saved registers are modified!
+
+  // Now that we know which registers need to be saved and restored, allocate
+  // stack slots for them.
+  for (auto &CS : CSI) {
+    // If the target has spilled this register to another register, we don't
+    // need to allocate a stack slot.
+    if (CS.isSpilledToReg())
+      continue;
+
+    unsigned Reg = CS.getReg();
+    const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+
+    int FrameIdx;
+    if (TRI->hasReservedSpillSlot(MF, Reg, FrameIdx)) {
+      CS.setFrameIdx(FrameIdx);
+      continue;
+    }
+
+    unsigned Size = TRI->getSpillSize(*RC);
+    // Nope, just spill it anywhere convenient.
+    unsigned Align = TRI->getSpillAlignment(*RC);
+    unsigned StackAlign = getStackAlignment();
+
+    // We may not be able to satisfy the desired alignment specification of
+    // the TargetRegisterClass if the stack alignment is smaller. Use the
+    // min.
+    Align = std::min(Align, StackAlign);
+    FrameIdx = MFI.CreateStackObject(Size, Align, true);
+
+    CS.setFrameIdx(FrameIdx);
+  }
+  return true;
+}
+
+static const TargetFrameLowering::SpillSlot spillSlotTable64[] = {
+  {/*ra*/  RISCV::X1,   -8},
+  {/*s0*/  RISCV::X8,   -16},
+  {/*s1*/  RISCV::X9,   -24},
+  {/*s2*/  RISCV::X18,  -32},
+  {/*s3*/  RISCV::X19,  -40},
+  {/*s4*/  RISCV::X20,  -48},
+  {/*s5*/  RISCV::X21,  -56},
+  {/*s6*/  RISCV::X22,  -64},
+  {/*s7*/  RISCV::X23,  -72},
+  {/*s8*/  RISCV::X24,  -80},
+  {/*s9*/  RISCV::X25,  -88},
+  {/*s10*/ RISCV::X26,  -96},
+  {/*s11*/ RISCV::X27, -104}};
+
+static const TargetFrameLowering::SpillSlot spillSlotTable32[] = {
+  {/*ra*/  RISCV::X1,   -4},
+  {/*s0*/  RISCV::X8,   -8},
+  {/*s1*/  RISCV::X9,  -12},
+  {/*s2*/  RISCV::X18, -16},
+  {/*s3*/  RISCV::X19, -20},
+  {/*s4*/  RISCV::X20, -24},
+  {/*s5*/  RISCV::X21, -28},
+  {/*s6*/  RISCV::X22, -32},
+  {/*s7*/  RISCV::X23, -36},
+  {/*s8*/  RISCV::X24, -40},
+  {/*s9*/  RISCV::X25, -44},
+  {/*s10*/ RISCV::X26, -48},
+  {/*s11*/ RISCV::X27, -52}};
+
+static const TargetFrameLowering::SpillSlot spillSlotTable32e[] = {
+  {/*ra*/ RISCV::X1,  -4},
+  {/*s0*/ RISCV::X8,  -8},
+  {/*s1*/ RISCV::X9, -12}};
+
+const TargetFrameLowering::SpillSlot *
+RISCVFrameLowering::getCalleeSavedSpillSlots(unsigned &NumEntries) const {
+  if (STI.is64Bit()) {
+    NumEntries = array_lengthof(spillSlotTable64);
+    return spillSlotTable64;
+  } else if (STI.isRV32E()) {
+    NumEntries = array_lengthof(spillSlotTable32e);
+    return spillSlotTable32e;
+  } else {
+    // RV32.
+    NumEntries = array_lengthof(spillSlotTable32);
+    return spillSlotTable32;
+  }
+}
+
+static const char *
+getSpillLibCallName(MachineFunction &MF) {
+  auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
+  const std::vector<CalleeSavedInfo> FixedCSRs = RVFI->getFixedCSRs();
+
+  if (FixedCSRs.empty())
+    return nullptr;
+
+  using std::max;
+  unsigned MaxReg = 0;
+  for (auto &CS : FixedCSRs)
+    MaxReg = std::max(MaxReg, CS.getReg());
+
+  switch (MaxReg) {
+  default:
+    llvm_unreachable("Something has gone wrong!");
+  case /*s11*/ RISCV::X27: return "__riscv_save_12";
+  case /*s10*/ RISCV::X26: return "__riscv_save_11";
+  case /*s9*/ RISCV::X25: return "__riscv_save_10";
+  case /*s8*/ RISCV::X24: return "__riscv_save_9";
+  case /*s7*/ RISCV::X23: return "__riscv_save_8";
+  case /*s6*/ RISCV::X22: return "__riscv_save_7";
+  case /*s5*/ RISCV::X21: return "__riscv_save_6";
+  case /*s4*/ RISCV::X20: return "__riscv_save_5";
+  case /*s3*/ RISCV::X19: return "__riscv_save_4";
+  case /*s2*/ RISCV::X18: return "__riscv_save_3";
+  case /*s1*/ RISCV::X9: return "__riscv_save_2";
+  case /*s0*/ RISCV::X8: return "__riscv_save_1";
+  case /*ra*/ RISCV::X1: return "__riscv_save_0";
+  }
+}
+
+static const char *
+getRestoreLibCallName(MachineFunction &MF) {
+  auto *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
+  const std::vector<CalleeSavedInfo> FixedCSRs = RVFI->getFixedCSRs();
+
+  if (FixedCSRs.empty())
+    return nullptr;
+
+  using std::max;
+  unsigned MaxReg = 0;
+  for (auto &CS : FixedCSRs)
+    MaxReg = std::max(MaxReg, CS.getReg());
+
+  switch (MaxReg) {
+  default:
+    llvm_unreachable("Something has gone wrong!");
+  case /*s11*/ RISCV::X27: return "__riscv_restore_12";
+  case /*s10*/ RISCV::X26: return "__riscv_restore_11";
+  case /*s9*/ RISCV::X25: return "__riscv_restore_10";
+  case /*s8*/ RISCV::X24: return "__riscv_restore_9";
+  case /*s7*/ RISCV::X23: return "__riscv_restore_8";
+  case /*s6*/ RISCV::X22: return "__riscv_restore_7";
+  case /*s5*/ RISCV::X21: return "__riscv_restore_6";
+  case /*s4*/ RISCV::X20: return "__riscv_restore_5";
+  case /*s3*/ RISCV::X19: return "__riscv_restore_4";
+  case /*s2*/ RISCV::X18: return "__riscv_restore_3";
+  case /*s1*/ RISCV::X9: return "__riscv_restore_2";
+  case /*s0*/ RISCV::X8: return "__riscv_restore_1";
+  case /*ra*/ RISCV::X1: return "__riscv_restore_0";
+  }
+}
+
+bool RISCVFrameLowering::spillCalleeSavedRegisters(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+    const std::vector<CalleeSavedInfo> &CSI,
+    const TargetRegisterInfo *TRI) const {
+  if (CSI.empty())
+    return true;
+
+  MachineFunction *MF = MBB.getParent();
+  auto *RVFI = MF->getInfo<RISCVMachineFunctionInfo>();
+  const TargetInstrInfo &TII = *MF->getSubtarget().getInstrInfo();
+  DebugLoc DL;
+  if (MI != MBB.end() && !MI->isDebugInstr())
+    DL = MI->getDebugLoc();
+
+  const char *SpillLibCallName = getSpillLibCallName(*MF);
+  if (SpillLibCallName)
+    BuildMI(MBB, MI, DL, TII.get(RISCV::PseudoCALLReg), RISCV::X5)
+        .addExternalSymbol(SpillLibCallName, RISCVII::MO_CALL)
+        .setMIFlag(MachineInstr::FrameSetup);
+
+  // Add registers spilt in libcall as liveins, spill other values manually.
+  for (auto &CS : RVFI->getFixedCSRs())
+    MBB.addLiveIn(CS.getReg());
+  for (auto &CS : RVFI->getNonFixedCSRs()) {
+    // Insert the spill to the stack frame.
+    unsigned Reg = CS.getReg();
+    const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+    TII.storeRegToStackSlot(MBB, MI, Reg, true, CS.getFrameIdx(), RC, TRI);
+  }
+
+  return true;
+}
+
+bool RISCVFrameLowering::restoreCalleeSavedRegisters(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+    std::vector<CalleeSavedInfo> &CSI, const TargetRegisterInfo *TRI) const {
+  if (CSI.empty())
+    return true;
+
+  MachineFunction *MF = MBB.getParent();
+  auto *RVFI = MF->getInfo<RISCVMachineFunctionInfo>();
+  const TargetInstrInfo &TII = *MF->getSubtarget().getInstrInfo();
+  DebugLoc DL;
+  if (MI != MBB.end() && !MI->isDebugInstr())
+    DL = MI->getDebugLoc();
+
+  // Manually restore values not restored by libcall. Insert in reverse order.
+  // loadRegFromStackSlot can insert multiple instructions.
+  for (auto &CS : reverse(RVFI->getNonFixedCSRs())) {
+    unsigned Reg = CS.getReg();
+    const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+    TII.loadRegFromStackSlot(MBB, MI, Reg, CS.getFrameIdx(), RC, TRI);
+    assert(MI != MBB.begin() &&
+            "loadRegFromStackSlot didn't insert any code!");
+  }
+
+  const char *RestoreLibCallName = getRestoreLibCallName(*MF);
+  if (RestoreLibCallName) {
+    // Replace terminating tail calls with a simple call. This is valid because
+    // the return address register is always callee saved as part of the
+    // save/restore libcalls.
+    if (MI != MBB.end() && MI->getOpcode() == RISCV::PseudoTAIL) {
+      MachineBasicBlock::iterator NewMI = BuildMI(MBB, MI, DL, TII.get(RISCV::PseudoCALL))
+          .add(MI->getOperand(0));
+      NewMI->copyImplicitOps(*MF, *MI);
+      MI->eraseFromParent();
+      MI = ++NewMI;
+    }
+
+    MachineBasicBlock::iterator NewMI = BuildMI(MBB, MI, DL, TII.get(RISCV::PseudoTAIL))
+        .addExternalSymbol(RestoreLibCallName, RISCVII::MO_CALL)
+        .setMIFlag(MachineInstr::FrameDestroy);
+
+    // Remove trailing returns, since the terminator is now a tail call to the
+    // restore function.
+    if (MI != MBB.end() && MI->getOpcode() == RISCV::PseudoRET) {
+      NewMI->copyImplicitOps(*MF, *MI);
+      MI->eraseFromParent();
+    }
+  }
+
+  return true;
 }

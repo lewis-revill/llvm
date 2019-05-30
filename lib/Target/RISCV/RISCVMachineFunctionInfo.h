@@ -31,6 +31,21 @@ private:
   /// of 32-bit GPRs via the stack.
   int MoveF64FrameIndex = -1;
 
+  Optional<std::vector<CalleeSavedInfo>> FixedCSRs = None;
+  Optional<std::vector<CalleeSavedInfo>> NonFixedCSRs = None;
+
+  void analyzeCSI() {
+    const std::vector<CalleeSavedInfo> &CSI = MF.getFrameInfo().getCalleeSavedInfo();
+
+    FixedCSRs = std::vector<CalleeSavedInfo>();
+    NonFixedCSRs = std::vector<CalleeSavedInfo>();
+    for (auto &CS : CSI)
+      if (CS.getFrameIdx() < 0)
+        FixedCSRs->push_back(CS);
+      else
+        NonFixedCSRs->push_back(CS);
+  }
+
 public:
   //  RISCVMachineFunctionInfo() = default;
 
@@ -46,6 +61,18 @@ public:
     if (MoveF64FrameIndex == -1)
       MoveF64FrameIndex = MF.getFrameInfo().CreateStackObject(8, 8, false);
     return MoveF64FrameIndex;
+  }
+
+  const std::vector<CalleeSavedInfo> &getFixedCSRs() {
+    if (!FixedCSRs)
+      analyzeCSI();
+    return *FixedCSRs;
+  }
+
+  const std::vector<CalleeSavedInfo> &getNonFixedCSRs() {
+    if (!NonFixedCSRs)
+      analyzeCSI();
+    return *NonFixedCSRs;
   }
 };
 

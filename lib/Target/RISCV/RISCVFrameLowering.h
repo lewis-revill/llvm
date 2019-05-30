@@ -44,6 +44,20 @@ public:
   MachineBasicBlock::iterator
   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MI) const override;
+  bool assignCalleeSavedSpillSlots(
+      MachineFunction &MF, const TargetRegisterInfo *TRI,
+      std::vector<llvm::CalleeSavedInfo> &CSI) const override;
+  const SpillSlot *
+  getCalleeSavedSpillSlots(unsigned &NumEntries) const override;
+  bool spillCalleeSavedRegisters(MachineBasicBlock &MBB,
+                                 MachineBasicBlock::iterator MI,
+                                 const std::vector<CalleeSavedInfo> &CSI,
+                                 const TargetRegisterInfo *TRI) const override;
+  bool
+  restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator MI,
+                              std::vector<CalleeSavedInfo> &CSI,
+                              const TargetRegisterInfo *TRI) const override;
 
 protected:
   const RISCVSubtarget &STI;

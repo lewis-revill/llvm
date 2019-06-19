@@ -47,6 +47,8 @@ public:
       MoveF64FrameIndex = MF.getFrameInfo().CreateStackObject(8, 8, false);
     return MoveF64FrameIndex;
   }
+
+  bool useSaveRestoreLibCalls() const;
 };
 
 } // end namespace llvm

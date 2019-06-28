@@ -54,6 +54,9 @@ public:
                               std::vector<CalleeSavedInfo> &CSI,
                               const TargetRegisterInfo *TRI) const override;
 
+  bool canUseAsPrologue(const MachineBasicBlock &MBB) const override;
+  bool canUseAsEpilogue(const MachineBasicBlock &MBB) const override;
+
 protected:
   const RISCVSubtarget &STI;
 
